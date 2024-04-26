@@ -10,9 +10,10 @@ class SimpleGenerator(nn.Module):
     the generator predicts the fourth word x_4.
     """
     def __init__(self, embed_dim):
+        super(SimpleGenerator, self).__init__()
         init = torch.randn([embed_dim, 1])
         unit_init = init / (torch.norm(init))
-        self.w = torch.nn.Parameter(unit_init, requires_grad=True)
+        self.w = torch.nn.Parameter(unit_init)
 
     def forward(self, x):
         v = x[:, 1, :] + x[:, 2, :] - x[:, 0, :]
@@ -29,7 +30,7 @@ class SimpleDiscriminator(nn.Module):
         super(SimpleDiscriminator, self).__init__()
         init = torch.randn([embed_dim, 1])
         unit_init = init / (torch.norm(init))
-        self.w = torch.nn.Parameter(unit_init, requires_grad=True)
+        self.w = torch.nn.Parameter(unit_init)
 
     def forward(self, x):
         z_hat = torch.matmul(x, self.w)
@@ -37,10 +38,10 @@ class SimpleDiscriminator(nn.Module):
 
 # Define the GAN
 class SimpleGAN(nn.Module):
-    def __init__(self, generator, discriminator):
+    def __init__(self, embed_dim):
         super(SimpleGAN, self).__init__()
-        self.generator = generator
-        self.discriminator = discriminator
+        self.generator = SimpleGenerator(embed_dim)
+        self.discriminator = SimpleDiscriminator(embed_dim)
 
     def forward(self, x):
         z = self.generator(x)
