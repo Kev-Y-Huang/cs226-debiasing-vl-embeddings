@@ -3,14 +3,14 @@ import torch
 import torch.nn as nn
 
 
-class SimpleGenerator(nn.Module):
+class SimplePredictor(nn.Module):
     """
-    Simple generator model according to Zhang et al. (2018).
+    Simple predictor model according to Zhang et al. (2018).
     Given the first three words in a gender-based analogy problem x_1, x_2, and x_3,
-    the generator predicts the fourth word x_4.
+    the predictor predicts the fourth word x_4.
     """
     def __init__(self, embed_dim):
-        super(SimpleGenerator, self).__init__()
+        super(SimplePredictor, self).__init__()
         init = torch.randn([embed_dim, 1])
         unit_init = init / (torch.norm(init))
         self.w = torch.nn.Parameter(unit_init)
@@ -21,29 +21,17 @@ class SimpleGenerator(nn.Module):
         return y_hat
 
 
-class SimpleDiscriminator(nn.Module):
+class SimpleAdversary(nn.Module):
     """
-    Simple discriminator model according to Zhang et al. (2018).
-    Given a word embedding z, the discriminator predicts the value of the protected attribute.
+    Simple adversary model according to Zhang et al. (2018).
+    Given a word embedding z, the adversary predicts the value of the protected attribute.
     """
     def __init__(self, embed_dim):
-        super(SimpleDiscriminator, self).__init__()
-        init = torch.randn([embed_dim, 1])
+        super(SimpleAdversary, self).__init__()
+        init = torch.randn(embed_dim)
         unit_init = init / (torch.norm(init))
         self.w = torch.nn.Parameter(unit_init)
 
     def forward(self, x):
         z_hat = torch.matmul(x, self.w)
         return z_hat
-
-# Define the GAN
-class SimpleGAN(nn.Module):
-    def __init__(self, embed_dim):
-        super(SimpleGAN, self).__init__()
-        self.generator = SimpleGenerator(embed_dim)
-        self.discriminator = SimpleDiscriminator(embed_dim)
-
-    def forward(self, x):
-        z = self.generator(x)
-        y = self.discriminator(z)
-        return z, y
