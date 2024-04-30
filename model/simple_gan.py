@@ -18,6 +18,10 @@ class SimplePredictor(nn.Module):
         v = x[:, 1, :] + x[:, 2, :] - x[:, 0, :]
         y_hat = v - torch.matmul(torch.matmul(v, self.w), self.w.T)
         return y_hat
+    
+    def predict(self, x):
+        y_hat = x - torch.matmul(torch.matmul(x, self.w), self.w.T)
+        return y_hat
 
 
 class SimpleAdversary(nn.Module):
