@@ -29,6 +29,15 @@ class Trainer:
             torch.cuda.manual_seed_all(seed)
 
     def project_onto_subspace(self, y):
+        """
+        Projects the output embeddings onto the gender subspace.
+
+        Args:
+            y (np.ndarray): The output embeddings
+
+        Returns:
+            z (np.ndarray): Projection of output embeddings onto gender subspace.
+        """
         # Calculate "gender direction"
         # Female-Male word pairs
         pairs = [
@@ -92,8 +101,9 @@ class Trainer:
                     break
 
         path = "data/lists/equalize_pairs.json"
-        with open(path, 'r') as f:
+        with open(path, "r") as f:
             import json
+
             equalize_pairs = json.load(f)
             for pair in equalize_pairs:
                 gender_pairs.add((pair[0], pair[1]))
@@ -183,6 +193,18 @@ class Trainer:
         print(f"Pre-training completed in {end - start} seconds!")
 
     def prepare_data(self, X, y, z):
+        """
+        Prepares the data for training and testing using PyTorch DataLoader.
+
+        Args:
+            X: Input data as embeddings of the first three words in each analogy
+            y: Output data as embeddings of the fourth word in each analogy
+            z: Protected attribute data as the projection of the output embeddings
+
+        Returns:
+            train_loader: DataLoader for training data
+            test_loader: DataLoader for testing data
+        """
         # Split data into train and test
         x_train, x_test, y_train, y_test, z_train, z_test = train_test_split(
             X, y, z, test_size=0.1, random_state=42, stratify=z
@@ -212,9 +234,20 @@ class Trainer:
 
         return train_loader, test_loader
 
-    def train(self, X, y, a, predictor, adversary, debiased=True):
+    def train(self, X, y, z, predictor, adversary, debiased=True):
+        """
+        Trains the predictor and adversary models.
+
+        Args:
+            X: Input data as embeddings of the first three words in each analogy
+            y: Output data as embeddings of the fourth word in each analogy
+            z: Protected attribute data as the projection of the output embeddings
+            predictor: The predictor model
+            adversary: The adversary model
+            debiased: Whether to use the debiased algorithm (default: True)
+        """
         # Split data into train and test
-        train_loader, test_loader = self.prepare_data(X, y, a)
+        train_loader, test_loader = self.prepare_data(X, y, z)
 
         # Define the loss function and optimizer
         mse_loss = nn.MSELoss()
@@ -270,7 +303,7 @@ class Trainer:
                     # Project
                     proj = torch.sum(torch.inner(unit_dW_LA, dW_LP[i]))
                     # Calculate dW according to Zhang et al. (2018)
-                    p.grad = dW_LP[i] - (proj * unit_dW_LA) - (10**10 * dW_LA[i])
+                    p.grad = dW_LP[i] - (proj * unit_dW_LA) - (dW_LA[i])
 
                 p_optimizer.step()
                 a_optimizer.step()
