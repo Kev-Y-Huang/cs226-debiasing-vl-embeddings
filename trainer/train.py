@@ -135,18 +135,31 @@ class Trainer:
         attribs,
         debiased,
     ):
+        """
+        Training step for adversarial learning.
+
+        Args:
+            inputs: Input data as embeddings of the first three words in each analogy
+            embeds: Output data as embeddings of the fourth word in each analogy
+            attribs: Protected attribute data as the projection of the output embeddings
+            debiased: Whether to use the debiased algorithm
+
+        Returns:
+            train_p_loss: Training loss of the predictor model
+            train_a_loss: Training loss of the adversary model
+        """
         train_p_loss = 0.0
         train_a_loss = 0.0
 
         self.p_optimizer.zero_grad()
         self.a_optimizer.zero_grad()
 
-        # Compute loss for predictor
+        # Compute loss for predictor on analogy completion task
         embed_hat = self.predictor(inputs)
         p_loss = self.loss_fn(embed_hat, embeds)
         train_p_loss = p_loss.item()
 
-        # If not debiased, only train the predictor using the mse loss
+        # If not debiased, only train using predictor loss
         if not debiased:
             p_loss.backward()
             self.p_optimizer.step()
@@ -160,6 +173,7 @@ class Trainer:
         self.p_optimizer.zero_grad()
         self.a_optimizer.zero_grad()
 
+        # Compute loss for adversary on protected attribute prediction task
         attrib_hat = self.adversary(embed_hat)
         a_loss = self.loss_fn(attrib_hat, attribs)
         train_a_loss = a_loss.item()
@@ -171,9 +185,9 @@ class Trainer:
         for i, p in enumerate(self.predictor.parameters()):
             # Normalize dW_LA
             unit_dW_LA = dW_LA[i] / (torch.norm(dW_LA[i]) + torch.finfo(float).tiny)
-            # Project
+            # Project dW_LP onto dW_LA
             proj = torch.sum(torch.inner(unit_dW_LA, dW_LP[i]))
-            # Calculate dW according to Zhang et al. (2018)
+            # Calculate predictor gradients according to Zhang et al. (2018)
             p.grad = dW_LP[i] - (proj * unit_dW_LA) - (dW_LA[i])
 
         self.p_optimizer.step()
@@ -204,7 +218,8 @@ class Trainer:
             self.adversary.train()
             train_p_loss = 0.0
             train_a_loss = 0.0
-
+            
+            # Train the models
             for inputs, embeds, attribs in train_loader:
                 p_loss, a_loss = self.adversarial_train_step(
                     inputs, embeds, attribs, debiased
@@ -213,14 +228,14 @@ class Trainer:
                 train_a_loss += a_loss
 
             train_p_loss /= len(train_loader.dataset)
-            if debiased:
-                train_a_loss /= len(train_loader.dataset)
+            train_a_loss /= len(train_loader.dataset)
 
             self.predictor.eval()
             self.adversary.eval()
             test_p_loss = 0.0
             test_a_loss = 0.0
             with torch.no_grad():
+                # Test the models
                 for inputs, embeds, attribs in test_loader:
                     outputs = self.predictor(inputs)
                     p_loss = self.loss_fn(outputs, embeds)
@@ -231,9 +246,9 @@ class Trainer:
                         a_loss = self.loss_fn(labels, attribs)
                         test_a_loss += a_loss.item()
             test_p_loss /= len(test_loader.dataset)
-            if debiased:
-                test_a_loss /= len(test_loader.dataset)
+            test_a_loss /= len(test_loader.dataset)
 
+            # Log the loss values
             if epoch % 50 == 49:
                 print(f"Epoch {epoch+1}/{n_epochs}")
                 print(
@@ -244,6 +259,7 @@ class Trainer:
         end = time.time()
         print(f"Training completed in {end - start} seconds!")
 
+        # Compute metrics about the learned predictor
         w = self.predictor.w.detach().clone().numpy()
         proj = np.dot(w.T, self.gender_vector)
         size = np.linalg.norm(w)
