@@ -176,11 +176,17 @@ class Trainer:
         # Compute loss for adversary on protected attribute prediction task
         attrib_hat = self.adversary(embed_hat)
         a_loss = self.loss_fn(attrib_hat, attribs)
-        train_a_loss = a_loss.item()
         a_loss.backward()
 
         # Cloning gradients of adversarial loss w.r.t. predictor parameters
         dW_LA = [torch.clone(p.grad.detach()) for p in self.predictor.parameters()]
+
+        # Compute loss for adversary on protected attribute prediction task (NEW CHANGE?)
+        self.a_optimizer.zero_grad()
+        attrib_hat = self.adversary(embeds)
+        a_loss = self.loss_fn(attrib_hat, attribs)
+        train_a_loss = a_loss.item()
+        a_loss.backward()
 
         for i, p in enumerate(self.predictor.parameters()):
             # Normalize dW_LA
