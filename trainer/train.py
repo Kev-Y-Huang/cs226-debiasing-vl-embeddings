@@ -1,20 +1,20 @@
 import time
 
 import numpy as np
-import requests
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from model.simple_gan import *
 from sklearn.model_selection import train_test_split
-from tqdm import tqdm
 
 
 class Trainer:
-    def __init__(self, wv, w2i):
-        self.wv = wv
-        self.w2i = w2i
-        self.gender_vector = None
+    def __init__(self, predictor, adversary, gender_vector):
+        self.predictor = predictor
+        self.adversary = adversary
+        self.gender_vector = gender_vector
+        self.p_optimizer = optim.Adam(self.predictor.parameters(), lr=0.0001)
+        self.a_optimizer = optim.Adam(self.adversary.parameters(), lr=0.0001)
+        self.loss_fn = nn.MSELoss()
 
     def set_seed(self, seed):
         """
@@ -28,129 +28,23 @@ class Trainer:
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(seed)
 
-    def project_onto_subspace(self, y):
-        """
-        Projects the output embeddings onto the gender subspace.
-
-        Args:
-            y (np.ndarray): The output embeddings
-
-        Returns:
-            z (np.ndarray): Projection of output embeddings onto gender subspace.
-        """
-        # Calculate "gender direction"
-        # Female-Male word pairs
-        pairs = [
-            ("woman", "man"),
-            ("her", "his"),
-            ("she", "he"),
-            ("aunt", "uncle"),
-            ("niece", "nephew"),
-            ("daughters", "sons"),
-            ("mother", "father"),
-            ("daughter", "son"),
-            ("granddaughter", "grandson"),
-            ("girl", "boy"),
-            ("stepdaughter", "stepson"),
-            ("mom", "dad"),
-        ]
-        # Calculate the difference between female and male word embeddings
-        diff = np.array(
-            [self.wv[self.w2i[wf]] - self.wv[self.w2i[wm]] for wf, wm in pairs]
-        )
-
-        # Bias subspace is defined by top principal component of the differences
-        cov = np.cov(np.array(diff).T)
-        evals, evecs = np.linalg.eig(cov)
-        dir = np.real(evecs[:, np.argmax(evals)])
-        self.gender_vector = dir / np.linalg.norm(dir)
-
-        # Get projection of output embeddings onto gender subspace
-        z = np.array([np.dot(y_, self.gender_vector) for y_ in y])
-        return z
-
-    def preprocess(self):
-        """
-        Preprocesses the analogy data to produce input, output, and protected attribute data.
-
-        Returns:
-            X: Input data as embeddings of the first three words in each analogy
-            y: Output data as embeddings of the fourth word in each analogy
-            a: Protected attribute data as the cosine similarity of each output embedding
-        """
-        # Load analogy data
-        url = "http://download.tensorflow.org/data/questions-words.txt"
-        # Family category includes gender dynamics
-        category = "family"
-        r = requests.get(url, allow_redirects=False)
-        lines = r.text.split("\n")
-        gender_pairs = set()
-        valid_category = False
-        for line in lines:
-            sp = line.split(" ")
-            # Start of category will be preceded by the line ": family"
-            if not valid_category:
-                valid_category = sp[1] == category
-            else:
-                # Each analogy will be formatted as "a b c d" where a:b::c:d
-                if len(sp) == 4:
-                    gender_pairs.add((sp[0], sp[1]))
-                    gender_pairs.add((sp[2], sp[3]))
-                # End of category will be a new category declaration ": category"
-                else:
-                    break
-
-        path = "data/lists/equalize_pairs.json"
-        with open(path, "r") as f:
-            import json
-
-            equalize_pairs = json.load(f)
-            for pair in equalize_pairs:
-                gender_pairs.add((pair[0], pair[1]))
-
-        gender_pairs = list(gender_pairs)
-        print(f"{len(gender_pairs)} total pairs")
-
-        analogies = []
-        for i, pair1 in enumerate(gender_pairs):
-            for pair2 in gender_pairs[:i] + gender_pairs[i + 1 :]:
-                analogies.append(pair1 + pair2)
-        print(f"{len(analogies)} analogies!")
-
-        X = []
-        y = []
-        for analogy in tqdm(analogies):
-            try:
-                x = []
-                for word in analogy[:-1]:
-                    x.append(self.wv[self.w2i[word.lower()]])
-                X.append(x)
-                y.append(self.wv[self.w2i[analogy[-1].lower()]])
-            except:
-                pass
-        X = np.array(X)
-        y = np.array(y)
-        z = self.project_onto_subspace(y)
-
-        return X, y, z
-
-    def pretrain_predictor(self, predictor, train_loader):
+    def pretrain_predictor(self, train_loader):
         # Define the loss function and optimizer
         criterion = nn.MSELoss()
-        optimizer = optim.Adam(predictor.parameters(), lr=2 ** (-16))
+        optimizer = optim.Adam(self.predictor.parameters(), lr=2 ** (-16))
 
         # Set the number of training epochs
         n_epochs = 3
 
         # Training loop
         start = time.time()
-        predictor.train()
+        self.predictor.train()
         for epoch in range(n_epochs):
             train_loss = 0.0
             for inputs, embeds, _ in train_loader:
                 optimizer.zero_grad()
 
-                outputs = predictor(inputs)
+                outputs = self.predictor(inputs)
 
                 # Calculate losses and backpropagate for predictor
                 loss = criterion(outputs, embeds)
@@ -163,23 +57,23 @@ class Trainer:
         end = time.time()
         print(f"Pre-training completed in {end - start} seconds!")
 
-    def pretrain_adversary(self, adversary, train_loader):
+    def pretrain_adversary(self, train_loader):
         # Define the loss function and optimizer
         criterion = nn.MSELoss()
-        optimizer = optim.Adam(adversary.parameters(), lr=2 ** (-16))
+        optimizer = optim.Adam(self.adversary.parameters(), lr=2 ** (-16))
 
         # Set the number of training epochs
         n_epochs = 3
 
         # Training loop
         start = time.time()
-        adversary.train()
+        self.adversary.train()
         for epoch in range(n_epochs):
             train_loss = 0.0
             for _, embeds, attribs in train_loader:
                 optimizer.zero_grad()
 
-                outputs = adversary(embeds)
+                outputs = self.adversary(embeds)
 
                 # Calculate losses and backpropagate for predictor
                 loss = criterion(outputs, attribs)
@@ -234,7 +128,60 @@ class Trainer:
 
         return train_loader, test_loader
 
-    def train(self, X, y, z, predictor, adversary, debiased=True):
+    def adversarial_train_step(
+        self,
+        inputs,
+        embeds,
+        attribs,
+        debiased,
+    ):
+        train_p_loss = 0.0
+        train_a_loss = 0.0
+
+        self.p_optimizer.zero_grad()
+        self.a_optimizer.zero_grad()
+
+        # Compute loss for predictor
+        embed_hat = self.predictor(inputs)
+        p_loss = self.loss_fn(embed_hat, embeds)
+        train_p_loss = p_loss.item()
+
+        # If not debiased, only train the predictor using the mse loss
+        if not debiased:
+            p_loss.backward()
+            self.p_optimizer.step()
+            return train_p_loss, 0
+
+        p_loss.backward(retain_graph=True)
+
+        # Cloning gradients of prediction loss w.r.t. predictor parameters
+        dW_LP = [torch.clone(p.grad.detach()) for p in self.predictor.parameters()]
+
+        self.p_optimizer.zero_grad()
+        self.a_optimizer.zero_grad()
+
+        attrib_hat = self.adversary(embed_hat)
+        a_loss = self.loss_fn(attrib_hat, attribs)
+        train_a_loss = a_loss.item()
+        a_loss.backward()
+
+        # Cloning gradients of adversarial loss w.r.t. predictor parameters
+        dW_LA = [torch.clone(p.grad.detach()) for p in self.predictor.parameters()]
+
+        for i, p in enumerate(self.predictor.parameters()):
+            # Normalize dW_LA
+            unit_dW_LA = dW_LA[i] / (torch.norm(dW_LA[i]) + torch.finfo(float).tiny)
+            # Project
+            proj = torch.sum(torch.inner(unit_dW_LA, dW_LP[i]))
+            # Calculate dW according to Zhang et al. (2018)
+            p.grad = dW_LP[i] - (proj * unit_dW_LA) - (dW_LA[i])
+
+        self.p_optimizer.step()
+        self.a_optimizer.step()
+
+        return train_p_loss, train_a_loss
+
+    def train(self, X, y, z, debiased=True):
         """
         Trains the predictor and adversary models.
 
@@ -242,18 +189,10 @@ class Trainer:
             X: Input data as embeddings of the first three words in each analogy
             y: Output data as embeddings of the fourth word in each analogy
             z: Protected attribute data as the projection of the output embeddings
-            predictor: The predictor model
-            adversary: The adversary model
             debiased: Whether to use the debiased algorithm (default: True)
         """
         # Split data into train and test
         train_loader, test_loader = self.prepare_data(X, y, z)
-
-        # Define the loss function and optimizer
-        mse_loss = nn.MSELoss()
-
-        p_optimizer = optim.Adam(predictor.parameters(), lr=0.0001)
-        a_optimizer = optim.Adam(adversary.parameters(), lr=0.0001)
 
         # Set the number of training epochs
         n_epochs = 750
@@ -261,69 +200,35 @@ class Trainer:
         # Training loop
         start = time.time()
         for epoch in range(n_epochs):
-            predictor.train()
-            adversary.train()
+            self.predictor.train()
+            self.adversary.train()
             train_p_loss = 0.0
             train_a_loss = 0.0
+
             for inputs, embeds, attribs in train_loader:
-                p_optimizer.zero_grad()
-                a_optimizer.zero_grad()
+                p_loss, a_loss = self.adversarial_train_step(
+                    inputs, embeds, attribs, debiased
+                )
+                train_p_loss += p_loss
+                train_a_loss += a_loss
 
-                embed_hat = predictor(inputs)
-                p_loss = mse_loss(embed_hat, embeds)
-                train_p_loss += p_loss.item()
-
-                # If not debiased, only train the predictor using the mse loss
-                if not debiased:
-                    p_loss.backward()
-                    p_optimizer.step()
-                    continue
-
-                p_loss.backward(retain_graph=True)
-
-                # Cloning gradients of prediction loss w.r.t. predictor parameters
-                dW_LP = [torch.clone(p.grad.detach()) for p in predictor.parameters()]
-
-                p_optimizer.zero_grad()
-                a_optimizer.zero_grad()
-
-                attrib_hat = adversary(embed_hat)
-                a_loss = mse_loss(attrib_hat, attribs)
-                train_a_loss += a_loss.item()
-                a_loss.backward()
-
-                # Cloning gradients of adversarial loss w.r.t. predictor parameters
-                dW_LA = [torch.clone(p.grad.detach()) for p in predictor.parameters()]
-
-                for i, p in enumerate(predictor.parameters()):
-                    # Normalize dW_LA
-                    unit_dW_LA = dW_LA[i] / (
-                        torch.norm(dW_LA[i]) + torch.finfo(float).tiny
-                    )
-                    # Project
-                    proj = torch.sum(torch.inner(unit_dW_LA, dW_LP[i]))
-                    # Calculate dW according to Zhang et al. (2018)
-                    p.grad = dW_LP[i] - (proj * unit_dW_LA) - (dW_LA[i])
-
-                p_optimizer.step()
-                a_optimizer.step()
             train_p_loss /= len(train_loader.dataset)
             if debiased:
                 train_a_loss /= len(train_loader.dataset)
 
-            predictor.eval()
-            adversary.eval()
+            self.predictor.eval()
+            self.adversary.eval()
             test_p_loss = 0.0
             test_a_loss = 0.0
             with torch.no_grad():
                 for inputs, embeds, attribs in test_loader:
-                    outputs = predictor(inputs)
-                    p_loss = mse_loss(outputs, embeds)
+                    outputs = self.predictor(inputs)
+                    p_loss = self.loss_fn(outputs, embeds)
                     test_p_loss += p_loss.item()
 
                     if debiased:
-                        labels = adversary(outputs)
-                        a_loss = mse_loss(labels, attribs)
+                        labels = self.adversary(outputs)
+                        a_loss = self.loss_fn(labels, attribs)
                         test_a_loss += a_loss.item()
             test_p_loss /= len(test_loader.dataset)
             if debiased:
@@ -339,7 +244,7 @@ class Trainer:
         end = time.time()
         print(f"Training completed in {end - start} seconds!")
 
-        w = predictor.w.detach().clone().numpy()
+        w = self.predictor.w.detach().clone().numpy()
         proj = np.dot(w.T, self.gender_vector)
         size = np.linalg.norm(w)
         print(f"Learned w has |w|={size} and <w,g>={proj}.")
