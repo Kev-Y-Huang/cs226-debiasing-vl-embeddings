@@ -29,6 +29,12 @@ class Trainer:
             torch.cuda.manual_seed_all(seed)
 
     def pretrain_predictor(self, train_loader):
+        """
+        Pre-trains the predictor model.
+
+        Args:
+            train_loader: DataLoader for training data
+        """
         # Define the loss function and optimizer
         criterion = nn.MSELoss()
         optimizer = optim.Adam(self.predictor.parameters(), lr=2 ** (-16))
@@ -58,6 +64,12 @@ class Trainer:
         print(f"Pre-training completed in {end - start} seconds!")
 
     def pretrain_adversary(self, train_loader):
+        """
+        Pre-trains the adversary model.
+
+        Args:
+            train_loader: DataLoader for training data
+        """
         # Define the loss function and optimizer
         criterion = nn.MSELoss()
         optimizer = optim.Adam(self.adversary.parameters(), lr=2 ** (-16))
@@ -101,7 +113,7 @@ class Trainer:
         """
         # Split data into train and test
         x_train, x_test, y_train, y_test, z_train, z_test = train_test_split(
-            X, y, z, test_size=0.1, random_state=42, stratify=z
+            X, y, z, test_size=0.1, random_state=226, stratify=z
         )
 
         # Convert the data to PyTorch tensors
@@ -201,7 +213,7 @@ class Trainer:
 
         return train_p_loss, train_a_loss
 
-    def train(self, X, y, z, debiased=True):
+    def train(self, X, y, z, debiased=True, n_epochs=250):
         """
         Trains the predictor and adversary models.
 
@@ -210,12 +222,10 @@ class Trainer:
             y: Output data as embeddings of the fourth word in each analogy
             z: Protected attribute data as the projection of the output embeddings
             debiased: Whether to use the debiased algorithm (default: True)
+            n_epochs: Number of training epochs (default: 250)
         """
         # Split data into train and test
         train_loader, test_loader = self.prepare_data(X, y, z)
-
-        # Set the number of training epochs
-        n_epochs = 750
 
         # Training loop
         start = time.time()
