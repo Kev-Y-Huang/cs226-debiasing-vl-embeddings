@@ -16,6 +16,7 @@ def project_onto_subspace(wv, w2i, y):
 
     Returns:
         z (np.ndarray): Projection of output embeddings onto gender subspace.
+        gender_vector (np.ndarray): Vectors spanning the gender subspace.
     """
     # Calculate "gender direction"
     # Female-Male word pairs
@@ -46,6 +47,37 @@ def project_onto_subspace(wv, w2i, y):
     z = np.array([np.dot(y_, gender_vector) for y_ in y])
     return z, gender_vector
 
+
+def transform_analogies(wv, w2i, analogies):
+    """
+    Transforms the analogy data into input and output data.
+
+    Args:
+        wv (np.ndarray): Word embeddings
+        w2i (dict): Word to index mapping
+        analogies (list): List of analogies
+
+    Returns:
+        X: Input data as embeddings of the first three words in each analogy
+        y: Output data as embeddings of the fourth word in each analogy 
+    """
+    X = []
+    y = []
+    for analogy in tqdm(analogies):
+        try:
+            # First three words are input, last word is output
+            x = []
+            for word in analogy[:-1]:
+                x.append(wv[w2i[word.lower()]])
+            X.append(np.stack(x))
+            y.append(wv[w2i[analogy[-1].lower()]])
+        except:
+            # Skip adding analogy any of the words are not in the vocabulary
+            pass
+    X = np.stack(X)
+    y = np.stack(y)
+
+    return X, y
 
 def preprocess(wv, w2i):
     """
@@ -95,20 +127,40 @@ def preprocess(wv, w2i):
     for i, pair1 in enumerate(gender_pairs):
         for pair2 in gender_pairs[:i] + gender_pairs[i + 1 :]:
             analogies.append(pair1 + pair2)
+
     print(f"{len(analogies)} analogies!")
 
-    X = []
-    y = []
-    for analogy in tqdm(analogies):
-        try:
-            x = []
-            for word in analogy[:-1]:
-                x.append(wv[w2i[word.lower()]])
-            X.append(x)
-            y.append(wv[w2i[analogy[-1].lower()]])
-        except:
-            pass
-    X = np.array(X)
-    y = np.array(y)
+    return transform_analogies(wv, w2i, analogies)
 
-    return X, y
+
+def preprocess_v2(wv, w2i, categories=[]):
+    """
+    Preprocesses the analogy data to produce input, output, and protected attribute data.
+    More closely aligns with original Zhang et al. (2018) implementation.
+
+    Args:
+        wv (np.ndarray): Word embeddings
+        w2i (dict): Word to index mapping
+        categories (list): List of categories to include in the analogy data (default: all)
+
+    Returns:
+        X: Input data as embeddings of the first three words in each analogy
+        y: Output data as embeddings of the fourth word in each analogy
+    """
+    # Load analogy data
+    url = "http://download.tensorflow.org/data/questions-words.txt"
+    r = requests.get(url, allow_redirects=False)
+    lines = r.text.split("\n")
+    analogies = []
+    valid_category = False
+    for line in lines:
+        sp = line.split(" ")
+        # Start of category will be preceded by the line ": category"
+        if len(sp) == 2:
+            valid_category = not categories or sp[1] in categories
+        elif valid_category:
+            analogies.append(sp)
+
+    print(f"{len(analogies)} analogies!")
+
+    return transform_analogies(wv, w2i, analogies)
