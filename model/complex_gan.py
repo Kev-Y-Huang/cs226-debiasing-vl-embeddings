@@ -8,6 +8,7 @@ class ComplexPredictor(nn.Module):
     Given the first three words in a gender-based analogy problem x_1, x_2, and x_3,
     the predictor predicts the fourth word x_4.
     """
+
     def __init__(self, embed_dim):
         super(ComplexPredictor, self).__init__()
         self.fc1 = nn.Linear(embed_dim, 512)
@@ -19,11 +20,20 @@ class ComplexPredictor(nn.Module):
         output = self.lrelu(self.fc1(v))
         output = self.fc2(output)
         return v - output
-    
+
     def predict(self, x):
-        output = self.fc1(x)
-        output = self.fc2(output)
-        return x - output
+        with torch.no_grad():
+            output = self.lrelu(self.fc1(x))
+            output = self.fc2(output)
+            return x - output
+
+    def predict_batch(self, xs):
+        with torch.no_grad():
+            y_hats = []
+            # Split the input into chunks of size 32 to avoid OOM errors
+            for embeds in torch.split(xs, 32):
+                y_hats.append(self.predict(embeds))
+            return torch.cat(y_hats, axis=0)
 
 
 class ComplexAdversary(nn.Module):

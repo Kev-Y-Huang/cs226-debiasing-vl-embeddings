@@ -4,14 +4,17 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from sklearn.model_selection import train_test_split
+import torch.utils
+from utils.preprocess import project_onto_subspace
 
 
 class Trainer:
-    def __init__(self, predictor, adversary, gender_vector):
+    def __init__(self, predictor, adversary, gender_vector, word_embeds, w2i):
         self.predictor = predictor
         self.adversary = adversary
         self.gender_vector = gender_vector
+        self.word_embeds = word_embeds
+        self.w2i = w2i
         self.p_optimizer = optim.Adam(self.predictor.parameters(), lr=0.0001)
         self.a_optimizer = optim.Adam(self.adversary.parameters(), lr=0.0001)
         self.loss_fn = nn.MSELoss()
@@ -49,10 +52,7 @@ class Trainer:
             train_loss = 0.0
             for inputs, embeds, _ in train_loader:
                 optimizer.zero_grad()
-
                 outputs = self.predictor(inputs)
-
-                # Calculate losses and backpropagate for predictor
                 loss = criterion(outputs, embeds)
                 train_loss += loss.item()
                 loss.backward()
@@ -84,10 +84,7 @@ class Trainer:
             train_loss = 0.0
             for _, embeds, attribs in train_loader:
                 optimizer.zero_grad()
-
                 outputs = self.adversary(embeds)
-
-                # Calculate losses and backpropagate for predictor
                 loss = criterion(outputs, attribs)
                 train_loss += loss.item()
                 loss.backward()
@@ -112,27 +109,15 @@ class Trainer:
             test_loader: DataLoader for testing data
         """
         # Split data into train and test
-        x_train, x_test, y_train, y_test, z_train, z_test = train_test_split(
-            X, y, z, test_size=0.1, random_state=226, stratify=z
+        dataset = torch.utils.data.TensorDataset(X, y, z)
+        train_len = int(0.9 * len(dataset))
+        train_dataset, test_dataset = torch.utils.data.random_split(
+            dataset, [train_len, len(dataset) - train_len]
         )
-
-        # Convert the data to PyTorch tensors
-        x_train_tensor = torch.tensor(x_train, dtype=torch.float32)
-        y_train_tensor = torch.tensor(y_train, dtype=torch.float32)
-        z_train_tensor = torch.tensor(z_train, dtype=torch.float32)
-        x_test_tensor = torch.tensor(x_test, dtype=torch.float32)
-        y_test_tensor = torch.tensor(y_test, dtype=torch.float32)
-        z_test_tensor = torch.tensor(z_test, dtype=torch.float32)
 
         # Create a PyTorch DataLoader for training and testing data
-        train_dataset = torch.utils.data.TensorDataset(
-            x_train_tensor, y_train_tensor, z_train_tensor
-        )
         train_loader = torch.utils.data.DataLoader(
             train_dataset, batch_size=32, shuffle=True
-        )
-        test_dataset = torch.utils.data.TensorDataset(
-            x_test_tensor, y_test_tensor, z_test_tensor
         )
         test_loader = torch.utils.data.DataLoader(
             test_dataset, batch_size=32, shuffle=False
@@ -146,15 +131,17 @@ class Trainer:
         embeds,
         attribs,
         debiased,
+        recompute_subspace,
     ):
         """
         Training step for adversarial learning.
 
         Args:
-            inputs: Input data as embeddings of the first three words in each analogy
-            embeds: Output data as embeddings of the fourth word in each analogy
-            attribs: Protected attribute data as the projection of the output embeddings
-            debiased: Whether to use the debiased algorithm
+            inputs (torch.tensor): Input data as embeddings of the first three words in each analogy
+            embeds (torch.tensor): Output data as embeddings of the fourth word in each analogy
+            attribs (torch.tensor): Protected attribute data as the projection of the output embeddings
+            debiased (bool): Whether to use the debiased algorithm
+            recompute_subspace (bool): Whether to recompute the subspace
 
         Returns:
             train_p_loss: Training loss of the predictor model
@@ -166,33 +153,42 @@ class Trainer:
         self.p_optimizer.zero_grad()
         self.a_optimizer.zero_grad()
 
-        # Compute loss for predictor on analogy completion task
-        embed_hat = self.predictor(inputs)
-        p_loss = self.loss_fn(embed_hat, embeds)
+        # Generate y_hat and compute L_P(y_hat, y)
+        pred = self.predictor(inputs)
+        p_loss = self.loss_fn(pred, embeds)
         train_p_loss = p_loss.item()
 
-        # If not debiased, only train using predictor loss
+        # If not debiased, update predictor only using dW_LP
         if not debiased:
             p_loss.backward()
             self.p_optimizer.step()
             return train_p_loss, 0
 
+        # Retain graph so that can compute dW_LA
         p_loss.backward(retain_graph=True)
 
-        # Cloning gradients of prediction loss w.r.t. predictor parameters
-        dW_LP = [torch.clone(p.grad.detach()) for p in self.predictor.parameters()]
+        # Cloning gradients of prediction loss w.r.t. W
+        dW_LP = [p.grad.detach().clone() for p in self.predictor.parameters()]
 
         self.p_optimizer.zero_grad()
         self.a_optimizer.zero_grad()
 
-        # Compute loss for adversary on protected attribute prediction task
-        attrib_hat = self.adversary(embed_hat)
-        a_loss = self.loss_fn(attrib_hat, attribs)
+        # Generate z_hat and compute L_A(z_hat, z)
+        attrib_pred = self.adversary(pred)
+        a_loss = self.loss_fn(attrib_pred, attribs)
         train_a_loss = a_loss.item()
         a_loss.backward()
 
-        # Cloning gradients of adversarial loss w.r.t. predictor parameters
-        dW_LA = [torch.clone(p.grad.detach()) for p in self.predictor.parameters()]
+        # Cloning gradients of adversary loss w.r.t. W
+        dW_LA = [p.grad.detach().clone() for p in self.predictor.parameters()]
+
+        if recompute_subspace:
+            # Update adversary using dW_LA for z_hat generate from true y
+            self.a_optimizer.zero_grad()
+            attrib_pred = self.adversary(embeds)
+            a_loss = self.loss_fn(attrib_pred, attribs)
+            train_a_loss = a_loss.item()
+            a_loss.backward()
 
         for i, p in enumerate(self.predictor.parameters()):
             # Normalize dW_LA
@@ -207,7 +203,7 @@ class Trainer:
 
         return train_p_loss, train_a_loss
 
-    def train(self, X, y, z, debiased=True, n_epochs=250):
+    def train(self, X, y, z, debiased=True, n_epochs=250, recompute_subspace=False):
         """
         Trains the predictor and adversary models.
 
@@ -228,11 +224,11 @@ class Trainer:
             self.adversary.train()
             train_p_loss = 0.0
             train_a_loss = 0.0
-            
+
             # Train the models
             for inputs, embeds, attribs in train_loader:
                 p_loss, a_loss = self.adversarial_train_step(
-                    inputs, embeds, attribs, debiased
+                    inputs, embeds, attribs, debiased, recompute_subspace
                 )
                 train_p_loss += p_loss
                 train_a_loss += a_loss
@@ -262,15 +258,37 @@ class Trainer:
             if epoch % 50 == 49:
                 print(f"Epoch {epoch+1}/{n_epochs}")
                 print(
-                    f"Train P Loss: {train_p_loss:.4f}, Train A Loss: {train_a_loss:.4f}"
+                    f"Train P Loss: {train_p_loss:.4E}, Train A Loss: {train_a_loss:.4E}"
                 )
-                print(f"Test P Loss: {test_p_loss:.4f}, Test A Loss: {test_a_loss:.4f}")
+                print(f"Test P Loss: {test_p_loss:.4E}, Test A Loss: {test_a_loss:.4E}")
+            if recompute_subspace:
+                # Recompute the embeddings every epoch
+                self.word_embeds = self.predictor.predict_batch(self.word_embeds)
+
+                # Recompute training data embeddings using predictor modl
+                old_shape = X.size()
+                X_embeds = torch.flatten(X, end_dim=1)
+                new_X_embeds = self.predictor.predict_batch(X_embeds)
+                X = torch.reshape(new_X_embeds, old_shape)
+                y = self.predictor.predict_batch(y)
+
+                # Recompute the subspace every 10 epochs
+                if epoch % 10 == 0:
+                    z, self.gender_vector = project_onto_subspace(
+                        self.word_embeds, self.w2i, y
+                    )
+
+                train_loader, test_loader = self.prepare_data(X, y, z)
 
         end = time.time()
         print(f"Training completed in {end - start} seconds!")
 
-        # Compute metrics about the learned predictor
-        w = self.predictor.w.detach().clone().numpy()
-        proj = np.dot(w.T, self.gender_vector)
-        size = np.linalg.norm(w)
-        print(f"Learned w has |w|={size} and <w,g>={proj}.")
+        # Recomput word_embeddings after training
+        self.word_embeds = self.predictor.predict_batch(self.word_embeds)
+
+        if hasattr(self.predictor, 'w'):
+            # Compute metrics about the learned predictor if simple predictor
+            w = torch.flatten(self.predictor.w)
+            proj = torch.dot(w, self.gender_vector)
+            size = torch.norm(w)
+            print(f"Learned w has |w|={size:.4f} and <w,g>={proj}.")
