@@ -2,6 +2,7 @@ import json
 
 import numpy as np
 import requests
+import torch
 from tqdm import tqdm
 
 
@@ -10,13 +11,13 @@ def project_onto_subspace(wv, w2i, y):
     Projects the output embeddings onto the gender subspace.
 
     Args:
-        wv (np.ndarray): Word embeddings
+        wv (torch.tensor): Word embeddings
         w2i (dict): Word to index mapping
-        y (np.ndarray): The output embeddings
+        y (torch.tensor): The output embeddings
 
     Returns:
-        z (np.ndarray): Projection of output embeddings onto gender subspace.
-        gender_vector (np.ndarray): Vectors spanning the gender subspace.
+        z (torch.tensor): Projection of output embeddings onto gender subspace.
+        gender_vector (torch.tensor): Vector spanning the gender subspace.
     """
     # Calculate "gender direction"
     # Female-Male word pairs
@@ -35,16 +36,14 @@ def project_onto_subspace(wv, w2i, y):
         ("mom", "dad"),
     ]
     # Calculate the difference between female and male word embeddings
-    diff = np.array([wv[w2i[wf]] - wv[w2i[wm]] for wf, wm in pairs])
+    diff = torch.stack([wv[w2i[wf]] - wv[w2i[wm]] for wf, wm in pairs])
 
-    # Bias subspace is defined by top principal component of the differences
-    cov = np.cov(np.array(diff).T)
-    evals, evecs = np.linalg.eig(cov)
-    dir = np.real(evecs[:, np.argmax(evals)])
-    gender_vector = dir / np.linalg.norm(dir)
+    # Perform PCA on the differences
+    _, _, V = torch.svd(diff)
+    gender_vector = V[:, 0]
 
     # Get projection of output embeddings onto gender subspace
-    z = np.array([np.dot(y_, gender_vector) for y_ in y])
+    z = torch.matmul(y, gender_vector)
     return z, gender_vector
 
 
@@ -59,7 +58,7 @@ def transform_analogies(wv, w2i, analogies):
 
     Returns:
         X: Input data as embeddings of the first three words in each analogy
-        y: Output data as embeddings of the fourth word in each analogy 
+        y: Output data as embeddings of the fourth word in each analogy
     """
     X = []
     y = []
@@ -74,8 +73,8 @@ def transform_analogies(wv, w2i, analogies):
         except:
             # Skip adding analogy any of the words are not in the vocabulary
             pass
-    X = np.stack(X)
-    y = np.stack(y)
+    X = torch.from_numpy(np.stack(X))
+    y = torch.from_numpy(np.stack(y))
 
     return X, y
 
