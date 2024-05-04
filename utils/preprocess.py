@@ -79,18 +79,13 @@ def transform_analogies(wv, w2i, analogies):
 
     return X, y
 
-def preprocess(wv, w2i):
+
+def preprocess():
     """
     Preprocesses the analogy data to produce input, output, and protected attribute data.
 
-    Args:
-        wv (np.ndarray): Word embeddings
-        w2i (dict): Word to index mapping
-
     Returns:
-        X: Input data as embeddings of the first three words in each analogy
-        y: Output data as embeddings of the fourth word in each analogy
-        a: Protected attribute data as the cosine similarity of each output embedding
+        analogies: List of analogies
     """
     # Load analogy data
     url = "http://download.tensorflow.org/data/questions-words.txt"
@@ -130,22 +125,16 @@ def preprocess(wv, w2i):
 
     print(f"{len(analogies)} analogies!")
 
-    return transform_analogies(wv, w2i, analogies)
+    return analogies
 
 
-def preprocess_v2(wv, w2i, categories=[]):
+def preprocess_v2(categories=[]):
     """
     Preprocesses the analogy data to produce input, output, and protected attribute data.
     More closely aligns with original Zhang et al. (2018) implementation.
 
-    Args:
-        wv (np.ndarray): Word embeddings
-        w2i (dict): Word to index mapping
-        categories (list): List of categories to include in the analogy data (default: all)
-
     Returns:
-        X: Input data as embeddings of the first three words in each analogy
-        y: Output data as embeddings of the fourth word in each analogy
+        analogies: List of analogies
     """
     # Load analogy data
     url = "http://download.tensorflow.org/data/questions-words.txt"
@@ -163,4 +152,4 @@ def preprocess_v2(wv, w2i, categories=[]):
 
     print(f"{len(analogies)} analogies!")
 
-    return transform_analogies(wv, w2i, analogies)
+    return analogies
